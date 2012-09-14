@@ -254,6 +254,14 @@
 <text x="-2.54" y="-2.54" size="1.778" layer="96">&gt;VALUE</text>
 <pin name="GND" x="0" y="2.54" visible="off" length="short" direction="sup" rot="R270"/>
 </symbol>
+<symbol name="VDD">
+<wire x1="1.27" y1="-1.905" x2="0" y2="0" width="0.254" layer="94"/>
+<wire x1="0" y1="0" x2="-1.27" y2="-1.905" width="0.254" layer="94"/>
+<wire x1="0" y1="1.27" x2="-1.27" y2="-1.905" width="0.254" layer="94"/>
+<wire x1="1.27" y1="-1.905" x2="0" y2="1.27" width="0.254" layer="94"/>
+<text x="-2.54" y="-2.54" size="1.778" layer="96" rot="R90">&gt;VALUE</text>
+<pin name="VDD" x="0" y="-2.54" visible="off" length="short" direction="sup" rot="R90"/>
+</symbol>
 </symbols>
 <devicesets>
 <deviceset name="VSS" prefix="VSS">
@@ -286,6 +294,19 @@
 <description>&lt;b&gt;SUPPLY SYMBOL&lt;/b&gt;</description>
 <gates>
 <gate name="1" symbol="GND" x="0" y="0"/>
+</gates>
+<devices>
+<device name="">
+<technologies>
+<technology name=""/>
+</technologies>
+</device>
+</devices>
+</deviceset>
+<deviceset name="VDD" prefix="VDD">
+<description>&lt;b&gt;SUPPLY SYMBOL&lt;/b&gt;</description>
+<gates>
+<gate name="G$1" symbol="VDD" x="0" y="0"/>
 </gates>
 <devices>
 <device name="">
@@ -4085,7 +4106,7 @@ Based on the following sources:
 <part name="R2" library="rcl" deviceset="R-EU_" device="R1206" value="10K"/>
 <part name="UL2" library="nixie" deviceset="IN-14" device=""/>
 <part name="Q2" library="nixie" deviceset="K155ID1" device=""/>
-<part name="JP1" library="pinhead" deviceset="PINHD-1X8" device=""/>
+<part name="JP1" library="pinhead" deviceset="PINHD-1X8" device="" value="CON"/>
 <part name="Q3" library="nixie" deviceset="K155ID1" device=""/>
 <part name="UL3" library="nixie" deviceset="IN-14" device=""/>
 <part name="Q4" library="nixie" deviceset="K155ID1" device=""/>
@@ -4104,6 +4125,8 @@ Based on the following sources:
 <part name="GND5" library="supply1" deviceset="GND" device=""/>
 <part name="P+4" library="supply1" deviceset="+5V" device=""/>
 <part name="P+5" library="supply1" deviceset="+5V" device=""/>
+<part name="VDD1" library="supply1" deviceset="VDD" device=""/>
+<part name="P+1" library="supply1" deviceset="+5V" device=""/>
 </parts>
 <sheets>
 <sheet>
@@ -4135,6 +4158,8 @@ Based on the following sources:
 <instance part="GND5" gate="1" x="50.8" y="-96.52"/>
 <instance part="P+4" gate="1" x="50.8" y="-38.1"/>
 <instance part="P+5" gate="1" x="50.8" y="-83.82"/>
+<instance part="VDD1" gate="G$1" x="-78.74" y="48.26"/>
+<instance part="P+1" gate="1" x="-71.12" y="48.26"/>
 </instances>
 <busses>
 </busses>
@@ -4432,11 +4457,11 @@ Based on the following sources:
 <wire x1="-40.64" y1="27.94" x2="-40.64" y2="30.48" width="0.1524" layer="91"/>
 <wire x1="-40.64" y1="30.48" x2="-27.94" y2="30.48" width="0.1524" layer="91"/>
 <wire x1="-27.94" y1="30.48" x2="-10.16" y2="30.48" width="0.1524" layer="91"/>
-<wire x1="-10.16" y1="-76.2" x2="-27.94" y2="-76.2" width="0.1524" layer="91"/>
 <wire x1="-27.94" y1="-76.2" x2="-27.94" y2="30.48" width="0.1524" layer="91"/>
 <junction x="-27.94" y="30.48"/>
 <pinref part="IC3" gate="A" pin="OE"/>
 <pinref part="IC1" gate="A" pin="OE"/>
+<wire x1="-10.16" y1="-76.2" x2="-27.94" y2="-76.2" width="0.1524" layer="91"/>
 </segment>
 </net>
 <net name="N$35" class="0">
@@ -4737,10 +4762,28 @@ Based on the following sources:
 <wire x1="50.8" y1="-88.9" x2="50.8" y2="-86.36" width="0.1524" layer="91"/>
 <pinref part="P+5" gate="1" pin="+5V"/>
 </segment>
+<segment>
+<pinref part="JP1" gate="A" pin="3"/>
+<pinref part="VDD1" gate="G$1" pin="VDD"/>
+<wire x1="-60.96" y1="38.1" x2="-71.12" y2="38.1" width="0.1524" layer="91"/>
+<wire x1="-71.12" y1="38.1" x2="-78.74" y2="38.1" width="0.1524" layer="91"/>
+<wire x1="-78.74" y1="38.1" x2="-78.74" y2="45.72" width="0.1524" layer="91"/>
+<pinref part="P+1" gate="1" pin="+5V"/>
+<wire x1="-71.12" y1="45.72" x2="-71.12" y2="38.1" width="0.1524" layer="91"/>
+<junction x="-71.12" y="38.1"/>
+</segment>
 </net>
 </nets>
 </sheet>
 </sheets>
+<errors>
+<approved hash="102,1,-53.34,22.86,VSS,GND,,,,"/>
+<approved hash="102,1,-78.74,45.72,VDD,+5V,,,,"/>
+<approved hash="104,1,53.34,63.5,Q1,VCC,+5V,,,"/>
+<approved hash="104,1,53.34,17.78,Q2,VCC,+5V,,,"/>
+<approved hash="104,1,53.34,-43.18,Q3,VCC,+5V,,,"/>
+<approved hash="104,1,53.34,-88.9,Q4,VCC,+5V,,,"/>
+</errors>
 </schematic>
 </drawing>
 </eagle>
