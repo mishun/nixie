@@ -1,0 +1,4 @@
+- correct pnp transistor pinout
+- add filter capacitor
+- make thermal pads under 7805 and IRF840
+- select voltage pot
