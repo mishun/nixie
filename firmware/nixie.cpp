@@ -9,34 +9,62 @@ private:
 	static Nixie nixie;
 
 private:
-	unsigned char mask;
+	unsigned char brightness;
+	unsigned char hours, minutes;
 
 private:
 	static void pushByte(unsigned char data)
 	{
-		for(char i = 0; i < 8; i++)
+		for(signed char i = 7; i >= 0; i--)
 		{
-			const unsigned char cur = nixie.mask | ((data >> (7 - i)) & 0x01);
-			PORTB = cur;
-			asm("nop\nnop\n");
-			PORTB = cur | 0x02;
+			PORTB &= ~0x03;
+			PORTB |= (data >> i) & 0x01;
+			PORTB |= 0x02;
 		}
 	}
 
 private:
 	explicit Nixie()
-		: mask(0x80)
+		: brightness(0xFF)
+		, hours(0xFF)
+		, minutes(0xFF)
 	{
+		// Set PB0--PB3 to output
 		DDRB |= 0x0F;
+
+		// Init timer 2
+		writeBrightness();
+		TCCR2 |= (1 << COM21) | (1 << WGM21) | (1 << WGM20) | (1 << CS21);
+	}
+
+	void writeBrightness()
+	{
+		OCR2 = brightness;
+	}
+	
+	void writeData()
+	{
+		PORTB &= ~0x04;
+		pushByte(hours);
+		pushByte(minutes);
+		PORTB |= 0x04;
 	}
 
 public:
-	static void update(const unsigned char a, const unsigned char b)
+	static void update(const unsigned char hours, const unsigned char minutes)
 	{
-		PORTB = 0x08;
-		pushByte(a);
-		pushByte(b);
-		PORTB = 0x0C;
+		if(hours == nixie.hours && minutes == nixie.minutes)
+			return;
+
+		nixie.hours = hours;
+		nixie.minutes = minutes;
+		nixie.writeData();
+	}
+
+	static void modifyBrightness(unsigned char (* f)(unsigned char))
+	{
+		nixie.brightness = f(nixie.brightness);
+		nixie.writeBrightness();
 	}
 };
 
@@ -63,14 +91,14 @@ private:
 		TWBR = 0xC0;
 		TWSR = 0;
 	}
-	
+
 private:
 	static void sendByte(unsigned char data)
 	{
 		TWDR = data;
 		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE);
 	}
-	
+
 	static void recvByte(unsigned char left)
 	{
 		if(left > 1)
@@ -307,14 +335,14 @@ int main()
 	WDTCR |= (1 << WDCE) | (1 << WDE);
 	WDTCR |= (1 << WDE) | (1 << WDP2) | (1 << WDP1) | (1 << WDP0);
 
-	// Enable INT0 on rising edge
-	GICR = 0x40;
-	MCUCR |= 0x03;
-
 	flags = 0;
 	sei();
 
 	RTClock::readAsync();
+
+	// Enable INT0 on rising edge
+	MCUCR |= (1 << ISC01) | (1 << ISC00);
+	GICR |= (1 << INT0);
 
 	for(;;)
 	{
@@ -325,7 +353,6 @@ int main()
 			flags &= ~TimeChangedFlag;
 		}
 	}
-
 
 	// Analog comparator
 	//ACSR = (ACSR & ~(1 << ACIS0) & ~(1 << ACIS1)) | (1 << ACIE);
