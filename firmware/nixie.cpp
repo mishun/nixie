@@ -1,6 +1,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
+#include <util/atomic.h>
 
 
 class Nixie
@@ -77,6 +78,7 @@ private:
 	static I2C i2c;
 
 private:
+	volatile unsigned char busy;
 	enum { StateIdle, StateCommand, StateSend, StateRecv } state;
 	void (* continuation)();
 	unsigned char * buffer;
@@ -84,12 +86,24 @@ private:
 
 private:
 	I2C()
-		: state(StateIdle)
+		: busy(0)
+		, state(StateIdle)
 		, continuation(nullptr)
 	{
 		// Init I2C
 		TWBR = 0xC0;
 		TWSR = 0;
+	}
+
+	bool enter()
+	{
+		unsigned char tmp = 0;
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+			tmp = busy;
+			busy = 1;
+		}
+		return (tmp == 0);
 	}
 
 private:
@@ -116,7 +130,7 @@ private:
 public:
 	static bool startAsync(void (* cont)())
 	{
-		if(i2c.state != StateIdle)
+		if(!i2c.enter())
 			return false;
 		i2c.state = StateCommand;
 		i2c.continuation = cont;
@@ -126,18 +140,23 @@ public:
 
 	static bool stopAsync()
 	{
-		if(i2c.state != StateIdle)
-			return false;
-		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);
-		return true;
+		bool res = false;
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+			if(i2c.busy == 0)
+			{
+				TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);
+				res = true;
+			}
+		}
+		return res;
 	}
 
 	static bool recvAsync(void * ptr, unsigned char cnt, void (* cont)())
 	{
 		if(cnt == 0)
 			return true;
-
-		if(i2c.state != StateIdle)
+		if(!i2c.enter())
 			return false;
 		i2c.state = StateRecv;
 		i2c.continuation = cont;
@@ -151,8 +170,7 @@ public:
 	{
 		if(cnt == 0)
 			return true;
-
-		if(i2c.state != StateIdle)
+		if(!i2c.enter())
 			return false;
 		i2c.state = StateSend;
 		i2c.continuation = cont;
@@ -164,6 +182,9 @@ public:
 
 	static void interrupt()
 	{
+		if(i2c.busy == 0)
+			while(1) {}
+
 		switch(i2c.state)
 		{
 		case StateSend:
@@ -191,6 +212,7 @@ public:
 		void (* tmp)() = i2c.continuation;
 		i2c.continuation = nullptr;
 		i2c.state = StateIdle;
+		i2c.busy = 0;
 
 		if(tmp != nullptr)
 			tmp();
