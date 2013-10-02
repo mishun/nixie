@@ -1,11 +1,190 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/wdt.h>
+
+
+class Nixie
+{
+private:
+	static Nixie nixie;
+
+private:
+	unsigned char mask;
+
+private:
+	static void pushByte(unsigned char data)
+	{
+		for(char i = 0; i < 8; i++)
+		{
+			const unsigned char cur = nixie.mask | ((data >> (7 - i)) & 0x01);
+			PORTB = cur;
+			asm("nop\nnop\n");
+			PORTB = cur | 0x02;
+		}
+	}
+
+private:
+	explicit Nixie()
+		: mask(0x80)
+	{
+		DDRB |= 0x0F;
+	}
+
+public:
+	static void update(const unsigned char a, const unsigned char b)
+	{
+		PORTB = 0x08;
+		pushByte(a);
+		pushByte(b);
+		PORTB = 0x0C;
+	}
+};
+
+Nixie Nixie::nixie;
+
+
+class I2C
+{
+private:
+	static I2C i2c;
+
+private:
+	enum { StateIdle, StateCommand, StateSend, StateRecv } state;
+	void (* continuation)();
+	unsigned char * buffer;
+	unsigned char counter;
+
+private:
+	I2C()
+		: state(StateIdle)
+		, continuation(nullptr)
+	{
+		// Init I2C
+		TWBR = 0xC0;
+		TWSR = 0;
+	}
+	
+private:
+	static void sendByte(unsigned char data)
+	{
+		TWDR = data;
+		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE);
+	}
+	
+	static void recvByte(unsigned char left)
+	{
+		if(left > 1)
+			TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWEA) | (1 << TWIE);
+		else
+			TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE);
+	}
+
+	static void sendFromBuffer()
+	{
+		i2c.counter--;
+		sendByte(*i2c.buffer++);
+	}
+
+public:
+	static bool startAsync(void (* cont)())
+	{
+		if(i2c.state != StateIdle)
+			return false;
+		i2c.state = StateCommand;
+		i2c.continuation = cont;
+		TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN) | (1 << TWIE);
+		return true;
+	}
+
+	static bool stopAsync()
+	{
+		if(i2c.state != StateIdle)
+			return false;
+		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);
+		return true;
+	}
+
+	static bool recvAsync(void * ptr, unsigned char cnt, void (* cont)())
+	{
+		if(cnt == 0)
+			return true;
+
+		if(i2c.state != StateIdle)
+			return false;
+		i2c.state = StateRecv;
+		i2c.continuation = cont;
+		i2c.buffer = (unsigned char *)ptr;
+		i2c.counter = cnt;
+		recvByte(cnt);
+		return true;
+	}
+
+	static bool sendAsync(void * ptr, unsigned char cnt, void (* cont)())
+	{
+		if(cnt == 0)
+			return true;
+
+		if(i2c.state != StateIdle)
+			return false;
+		i2c.state = StateSend;
+		i2c.continuation = cont;
+		i2c.buffer = (unsigned char *)ptr;
+		i2c.counter = cnt;
+		sendFromBuffer();
+		return true;
+	}
+
+	static void interrupt()
+	{
+		switch(i2c.state)
+		{
+		case StateSend:
+			if(i2c.counter > 0)
+			{
+				sendFromBuffer();
+				return;
+			}
+			break;
+
+		case StateRecv:
+			*i2c.buffer++ = TWDR;
+			i2c.counter--;
+			if(i2c.counter > 0)
+			{
+				recvByte(i2c.counter);
+				return;
+			}
+			break;
+
+		default:
+			break;
+		}
+
+		void (* tmp)() = i2c.continuation;
+		i2c.continuation = nullptr;
+		i2c.state = StateIdle;
+
+		if(tmp != nullptr)
+			tmp();
+	}
+};
+
+I2C I2C::i2c;
+
+ISR(TWI_vect)
+{
+	I2C::interrupt();
+}
+
+
+volatile unsigned char flags;
+const unsigned char TimeChangedFlag = 0x01;
 
 
 class RTClock
 {
-private:
-	bool busy;
+public:
+	static RTClock rtc;
 
 public:
 	unsigned char seconds;
@@ -17,28 +196,17 @@ public:
 	unsigned char year;
 	unsigned char control;
 
-public:
-	explicit RTClock()
+private:
+	RTClock() {}
+
+	void readedCallback()
 	{
-		// Init I2C
-		TWBR = 0xC0;
-		TWSR = 0;
-
-		busy = false;
-		read();
-
 		{
 			bool needWrite = false;
 
 			if((seconds & 0x80) != 0)
 			{
-				seconds = 0x00;
-				minutes = 0x00;
-				hours = 0x00;
-				day = 0x3;
-				date = 0x01;
-				month = 0x10;
-				year = 0x13;
+				setDefault();
 				needWrite = true;
 			}
 
@@ -49,139 +217,96 @@ public:
 			}
 
 			if(needWrite)
-				write();
+				writeAsync();
 		}
-	}
 
-	bool read()
-	{
-		if(busy)
-			return false;
-		busy = true;
-
-		startIIC();
-		sendIIC(0b11010000);
-		sendIIC(0x00);
-		startIIC();
-		sendIIC(0b11010001);
-		seconds = rcvIIC();
-		minutes = rcvIIC();
-		hours   = rcvIIC();
-		day     = rcvIIC();
-		date    = rcvIIC();
-		month   = rcvIIC();
-		year    = rcvIIC();
-		control = lastIIC();
-		stopIIC();
-
-		busy = false;
-		return true;
-	}
-
-	bool write()
-	{
-		if(busy)
-			return false;
-		busy = true;
-
-		startIIC();
-		sendIIC(0b11010000);
-		sendIIC(0x00);
-		sendIIC(seconds);
-		sendIIC(minutes);
-		sendIIC(hours);
-		sendIIC(day);
-		sendIIC(date);
-		sendIIC(month);
-		sendIIC(year);
-		sendIIC(control);
-		stopIIC();
-
-		busy = false;
-		return true;
-	}
-
-private:
-	static void startIIC()
-	{
-		TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN);
-		while((TWCR & (1 << TWINT)) == 0) {}
-	}
-
-	static void sendIIC(unsigned char data)
-	{
-		TWDR = data;
-		TWCR = (1 << TWINT) | (1 << TWEN);
-		while((TWCR & (1 << TWINT)) == 0) {}
-	}
-
-	static unsigned char rcvIIC()
-	{
-		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWEA);
-		while((TWCR & (1 << TWINT)) == 0) {}
-		return TWDR;
-	}
-
-	static unsigned char lastIIC()
-	{
-		TWCR = (1 << TWINT) | (1 << TWEN);
-		while((TWCR & (1 << TWINT)) == 0) {}
-		return TWDR;
-	}
-
-	static void stopIIC()
-	{
-		TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);
-		while((TWCR & (1 << TWSTO)) == 0) {}
-	}
-};
-
-
-class Nixie
-{
-private:
-	static void pushByte(unsigned char data)
-	{
-		for(char i = 0; i < 8; i++)
-		{
-			const unsigned char cur = (data >> (7 - i)) & 0x01;
-			PORTB = cur | 0x08;
-			asm("nop\nnop\n");
-			PORTB = cur | 0x0A;
-		}
+		flags |= TimeChangedFlag;
 	}
 
 public:
-	explicit Nixie()
+	void setDefault()
 	{
-		DDRB |= 0x0F;
+		seconds = 0x00;
+		minutes = 0x39;
+		hours = 0x13;
+		day = 0x3;
+		date = 0x28;
+		month = 0x10;
+		year = 0x13;
 	}
 
-	void update(const unsigned char a, const unsigned char b)
+public:
+	static bool readAsync()
 	{
-		PORTB = 0x08;
-		pushByte(a);
-		pushByte(b);
-		PORTB = 0x0C;
+		return I2C::startAsync(contReadSendIndex);
+	}
+
+	static bool writeAsync()
+	{
+		return I2C::startAsync(contWriteSendIndex);
+	}
+
+private:
+	static void contReadSendIndex()
+	{
+		static unsigned char addr[] = { 0b11010000, 0x00 };
+		I2C::sendAsync(addr, 2, contReadStartRecv);
+	}
+
+	static void contReadStartRecv()
+	{
+		I2C::startAsync(contReadSendAddr);
+	}
+
+	static void contReadSendAddr()
+	{
+		static unsigned char addr[] = { 0b11010001 };
+		I2C::sendAsync(addr, 1, contReadRecv);
+	}
+
+	static void contReadRecv()
+	{
+		I2C::recvAsync(&rtc.seconds, 8, contReadStop);
+	}
+
+	static void contReadStop()
+	{
+		I2C::stopAsync();
+		rtc.readedCallback();
+	}
+
+
+	static void contWriteSendIndex()
+	{
+		static unsigned char addr[] = { 0b11010000, 0x00 };
+		I2C::sendAsync(addr, 2, contWriteSend);
+	}
+	
+	static void contWriteSend()
+	{
+		I2C::sendAsync(&rtc, 8, contWriteStop);
+	}
+	
+	static void contWriteStop()
+	{
+		I2C::stopAsync();
 	}
 };
 
-
-RTClock rtc;
-Nixie nixie;
-
-volatile unsigned char flags;
-const unsigned char TimeChangedFlag = 0x01;
-
+RTClock RTClock::rtc;
 
 ISR(INT0_vect)
 {
-	flags |= TimeChangedFlag;
+	RTClock::readAsync();
 }
 
 
 int main()
 {
+	// Enable watchdog
+	WDTCR |= (1 << WDCE) | (1 << WDE);
+	WDTCR |= (1 << WDE) | (1 << WDP2) | (1 << WDP1) | (1 << WDP0);
+
 	// Enable INT0 on rising edge
 	GICR = 0x40;
 	MCUCR |= 0x03;
@@ -189,24 +314,14 @@ int main()
 	flags = 0;
 	sei();
 
-	/*{
-		rtc.seconds = 0x00;
-		rtc.minutes = 0x39;
-		rtc.hours = 0x13;
-		rtc.day = 0x3;
-		rtc.date = 0x28;
-		rtc.month = 0x10;
-		rtc.year = 0x13;
-		rtc.control = 0x10;
-		rtc.write();
-	}*/
+	RTClock::readAsync();
 
 	for(;;)
 	{
+		wdt_reset();
 		if(flags & TimeChangedFlag)
 		{
-			rtc.read();
-			nixie.update(rtc.hours, rtc.minutes);
+			Nixie::update(RTClock::rtc.hours, RTClock::rtc.minutes);
 			flags &= ~TimeChangedFlag;
 		}
 	}
